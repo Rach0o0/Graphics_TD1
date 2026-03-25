@@ -121,8 +121,6 @@ public:
 
 			N = (P - this->C) / dot(P - this->C, P - this->C);
 
-			std::cout << t;
-
 			return true;
 		}
 		
@@ -170,14 +168,15 @@ public:
 		for (int i = 0; i < objects.size(); i++) {
 			if (objects[i]->intersect(ray, P, t, N)) {
 				is_intersection = true;
+
+				if (t >= 0 && t < t_res) {
+					t_res = t;
+					object_id = i;
+					P_res = P;
+					N_res = N;
+				}
 			}
 			
-			if (t >= 0 && t < t_res) {
-				t_res = t;
-				object_id = i;
-				P_res = P;
-				N_res = N;
-			}
 		}
 		
 		return is_intersection;
@@ -279,9 +278,9 @@ int main() {
 			Vector color;
 
 			// TODO (lab 1) : correct ray_direction so that it goes through each pixel (j, i)			
-			bool X = j - W / 2 + 0.5;
-			bool Y = H / 2 - i - 0.5;
-			bool Z = -(W) / (2 * tan(scene.fov/2));
+			double X = j - W / 2 + 0.5;
+			double Y = H / 2 - i - 0.5;
+			double Z = -(W) / (2 * tan(scene.fov/2));
 			Vector ray_direction(X, Y, Z);
 			ray_direction.normalize();
 
