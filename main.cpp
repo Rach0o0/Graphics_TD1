@@ -4,6 +4,7 @@
 #include <vector>
 #include <cmath>
 #include <random>
+#include <iostream>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -91,7 +92,40 @@ public:
 	// t>=0 the distance between the ray origin and P (i.e., the parameter along the ray)
 	// and the unit normal N
 	bool intersect(const Ray& ray, Vector& P, double &t, Vector& N) const {
-		 // TODO (lab 1) : compute the intersection (just true/false at the begining of lab 1, then P, t and N as well)
+		// TODO (lab 1) : compute the intersection (just true/false at the begining of lab 1, then P, t and N as well)
+		
+		Vector oc = ray.O - this->C;
+		double a = dot(ray.u, oc);
+		double b = dot(oc, oc) - pow(this->R,2) ;
+		double delta = pow(a,2) - b;
+
+
+		Vector co = this->C - ray.O;
+		double t1 = dot(ray.u, co) - sqrt(delta);
+		double t2 = dot(ray.u, co) + sqrt(delta);
+
+	
+		if (delta >= 0) {
+			if (t2 < 0) {
+				return false;
+			}
+
+			if (t1 >= 0) {
+				t = t1;
+			}
+			else {
+				t = t2;
+			}
+
+			P = ray.O + t * ray.u;
+
+			N = (P - this->C) / dot(P - this->C, P - this->C);
+
+			std::cout << t;
+
+			return true;
+		}
+		
 		return false;
 	}
 
@@ -128,8 +162,25 @@ public:
 
 		// TODO (lab 1): iterate through the objects and check the intersections with all of them, 
 		// and keep the closest intersection, i.e., the one if smallest positive value of t
+		bool is_intersection = false;
+		double t_res = std::numeric_limits<double>::infinity();
+		Vector P_res;
+		Vector N_res;
 
-		return false;
+		for (int i = 0; i < objects.size(); i++) {
+			if (objects[i]->intersect(ray, P, t, N)) {
+				is_intersection = true;
+			}
+			
+			if (t >= 0 && t < t_res) {
+				t_res = t;
+				object_id = i;
+				P_res = P;
+				N_res = N;
+			}
+		}
+		
+		return is_intersection;
 	}
 
 
@@ -154,7 +205,15 @@ public:
 			if (objects[object_id]->transparent) { // optional
 
 				// return getColor in the refraction direction, with recursion_depth+1 (recursively)
-			} // else
+			}
+			else {
+				double attenuation = this->light_intensity / (4 * M_PI * dot(this->light_position - P, this->light_position - P));
+				Vector material = objects[object_id]->albedo / M_PI;
+				double solid_angle = dot(N, (this->light_position - P / dot(this->light_position - P, this->light_position - P)));
+				Vector color = attenuation * material * solid_angle;
+
+				return color;
+			}
 
 			// test if there is a shadow by sending a new ray
 			// if there is no shadow, compute the formula with dot products etc.
@@ -193,7 +252,7 @@ int main() {
 	Sphere floor(Vector(0, -1000, 0), 990, Vector(0.6, 0.5, 0.7));
 
 	Scene scene;
-	scene.camera_center = Vector(0, 0, 0);
+	scene.camera_center = Vector(0, 0, 55);
 	scene.light_position = Vector(-10,20,40);
 	scene.light_intensity = 3E7;
 	scene.fov = 60 * M_PI / 180.;
@@ -202,14 +261,15 @@ int main() {
 
 	scene.addObject(&center_sphere);
 
-	/*
+	
 	scene.addObject(&wall_left);
 	scene.addObject(&wall_right);
 	scene.addObject(&wall_front);
 	scene.addObject(&wall_behind);
 	scene.addObject(&ceiling);
 	scene.addObject(&floor);
-	*/
+	
+	
 
 	std::vector<unsigned char> image(W * H * 3, 0);
 
@@ -219,7 +279,11 @@ int main() {
 			Vector color;
 
 			// TODO (lab 1) : correct ray_direction so that it goes through each pixel (j, i)			
-			Vector ray_direction(0., 0., -1);
+			bool X = j - W / 2 + 0.5;
+			bool Y = H / 2 - i - 0.5;
+			bool Z = -(W) / (2 * tan(scene.fov/2));
+			Vector ray_direction(X, Y, Z);
+			ray_direction.normalize();
 
 			Ray ray(scene.camera_center, ray_direction);
 
