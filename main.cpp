@@ -1,5 +1,13 @@
 //Rachid Tazi BX26
 
+/*
+Actually working on lab2:
+- implement indirect lighting part for point light sources
+- add antialiasing
+- optional : soft shadows 
+*/
+
+
 #define _CRT_SECURE_NO_WARNINGS 1
 #include <vector>
 #include <cmath>
@@ -15,6 +23,8 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323856
 #endif
+
+#include <omp.h>
 
 static std::default_random_engine engine[32];
 static std::uniform_real_distribution<double> uniform(0, 1);
@@ -96,35 +106,33 @@ public:
 		
 		Vector oc = ray.O - this->C;
 		double a = dot(ray.u, oc);
-		double b = dot(oc, oc) - pow(this->R,2) ;
-		double delta = pow(a,2) - b;
+		double b = dot(oc, oc) - sqr(R);
+		double delta = sqr(a) - b;
 
+		if (delta < 0) {
+			return false;
+		}
 
 		Vector co = this->C - ray.O;
 		double t1 = dot(ray.u, co) - sqrt(delta);
 		double t2 = dot(ray.u, co) + sqrt(delta);
 
-	
-		if (delta >= 0) {
-			if (t2 < 0) {
-				return false;
-			}
-
-			if (t1 >= 0) {
-				t = t1;
-			}
-			else {
-				t = t2;
-			}
-
-			P = ray.O + t * ray.u;
-
-			N = (P - this->C) / dot(P - this->C, P - this->C);
-
-			return true;
+		if (t2 < 0) {
+			return false;
 		}
-		
-		return false;
+
+		if (t1 >= 0) {
+			t = t1;
+		}
+		else {
+			t = t2;
+		}
+
+		P = ray.O + t * ray.u;
+		N = (P - this->C);
+		N.normalize();
+
+		return true;
 	}
 
 	double R;
@@ -179,6 +187,9 @@ public:
 			
 		}
 		
+		t = t_res;
+		P = P_res;
+		N = N_res;
 		return is_intersection;
 	}
 
@@ -194,36 +205,69 @@ public:
 		Vector P, N;
 		double t;
 		int object_id;
-		if (intersect(ray, P, t, N, object_id)) {
 
-			if (objects[object_id]->mirror) {
-
-				// return getColor in the reflected direction, with recursion_depth+1 (recursively)
-			} // else
-
-			if (objects[object_id]->transparent) { // optional
-
-				// return getColor in the refraction direction, with recursion_depth+1 (recursively)
-			}
-			else {
-				double attenuation = this->light_intensity / (4 * M_PI * dot(this->light_position - P, this->light_position - P));
-				Vector material = objects[object_id]->albedo / M_PI;
-				double solid_angle = dot(N, (this->light_position - P / dot(this->light_position - P, this->light_position - P)));
-				Vector color = attenuation * material * solid_angle;
-
-				return color;
-			}
-
-			// test if there is a shadow by sending a new ray
-			// if there is no shadow, compute the formula with dot products etc.
-
-
-			// TODO (lab 2) : add indirect lighting component with a recursive call
+		if (!intersect(ray, P, t, N, object_id)) {
+			return Vector(0, 0, 0);
 		}
 
-		
+		if (objects[object_id]->mirror) {
+			//lab 2
+			// return getColor in the reflected direction, with recursion_depth+1 (recursively)
+			Vector reflected_direction = ray.u - 2 * dot(ray.u, N) * N;
+			reflected_direction.normalize();
 
-		return Vector(0, 0, 0);
+			Ray reflected_ray(P + 1e-4 * N, reflected_direction);
+			return getColor(reflected_ray, recursion_depth + 1);
+		}
+
+		if (objects[object_id]->transparent) {
+			//lab 2
+			// return getColor in the refraction direction, with recursion_depth+1 (recursively)
+
+
+			return Vector(0, 0, 0);
+		}
+
+		Vector to_light = this->light_position - P;
+		double distance_to_light2 = dot(to_light, to_light);
+		double distance_to_light = sqrt(distance_to_light2);
+		Vector wi = to_light / distance_to_light;
+
+		// test if there is a shadow by sending a new ray
+		// if there is no shadow, compute the formula with dot products etc.
+		//shadow ray 
+		Ray shadow_ray(P + 1e-4 * N, wi);
+
+		Vector shadow_P, shadow_N;
+		double shadow_t;
+		int shadow_object_id;
+
+		bool shadow = false;
+
+		if (intersect(shadow_ray, shadow_P, shadow_t, shadow_N, shadow_object_id)) {
+			if (shadow_t < distance_to_light) {
+				shadow = true;
+			}
+		}
+
+		if (shadow) {
+			return Vector(0, 0, 0);
+		}
+
+		double attenuation = light_intensity / (4 * M_PI * distance_to_light2);
+		Vector material = objects[object_id]->albedo / M_PI;
+		double solid_angle = dot(N, wi);
+
+		return attenuation * material * solid_angle;
+
+
+		// TODO (lab 2) : add indirect lighting component with a recursive call
+		/*
+		rendering equation : 
+		getColor depends on the point x in the scene , the ray direction -wo, 
+		monte carlo integration 
+		sampling strategies
+		*/
 	}
 
 	std::vector<const Object*> objects;
@@ -242,7 +286,7 @@ int main() {
 		engine[i].seed(i);
 	}
 
-	Sphere center_sphere(Vector(0, 0, 0), 10., Vector(0.8, 0.8, 0.8));
+	Sphere center_sphere(Vector(0, 0, 0), 10., Vector(0.8, 0.8, 0.8), true, false);
 	Sphere wall_left(Vector(-1000, 0, 0), 940, Vector(0.5, 0.8, 0.1));
 	Sphere wall_right(Vector(1000, 0, 0), 940, Vector(0.9, 0.2, 0.3));
 	Sphere wall_front(Vector(0, 0, -1000), 940, Vector(0.1, 0.6, 0.7));
@@ -255,7 +299,7 @@ int main() {
 	scene.light_position = Vector(-10,20,40);
 	scene.light_intensity = 3E7;
 	scene.fov = 60 * M_PI / 180.;
-	scene.gamma = 1.0;    // TODO (lab 1) : play with gamma ; typically, gamma = 2.2
+	scene.gamma = 2.2;    // TODO (lab 1) : play with gamma ; typically, gamma = 2.2
 	scene.max_light_bounce = 5;
 
 	scene.addObject(&center_sphere);
@@ -275,9 +319,10 @@ int main() {
 #pragma omp parallel for schedule(dynamic, 1)
 	for (int i = 0; i < H; i++) {
 		for (int j = 0; j < W; j++) {
-			Vector color;
+			Vector color(0.,0.,0.);
 
 			// TODO (lab 1) : correct ray_direction so that it goes through each pixel (j, i)			
+			/*
 			double X = j - W / 2 + 0.5;
 			double Y = H / 2 - i - 0.5;
 			double Z = -(W) / (2 * tan(scene.fov/2));
@@ -285,19 +330,50 @@ int main() {
 			ray_direction.normalize();
 
 			Ray ray(scene.camera_center, ray_direction);
+			*/
+
 
 			// TODO (lab 2) : add Monte Carlo / averaging of random ray contributions here
 			// TODO (lab 2) : add antialiasing by altering the ray_direction here
-			// TODO (lab 2) : add depth of field effect by altering the ray origin (and direction) here
+			
+			/*
+			discontinuity btwn adjacent pixels -> aliasing
+			camera sensor cells have an area, arranged in a Bayer pattern
+			twice as many "green cells" than red and blue
 
-			color  = scene.getColor(ray, 0);
+			We can directly emulate an RGB-senstive pixel array
+			Integrate radiance that reaches the camera sensor 
+			Li,j = Int[Li(x,wi(x)) hi,j(x)dx]
 
-			image[(i * W + j) * 3 + 0] = std::min(255., std::max(0., 255. * std::pow(color[0] / 255., 1. / scene.gamma)));
-			image[(i * W + j) * 3 + 1] = std::min(255., std::max(0., 255. * std::pow(color[1] / 255., 1. / scene.gamma)));
-			image[(i * W + j) * 3 + 2] = std::min(255., std::max(0., 255. * std::pow(color[2] / 255., 1. / scene.gamma)));
+			*/
+			int NB_PATHS = 20;
+			int max_path_length = 3;
+
+			for (int k = 0; k < NB_PATHS; k++) {
+				int tid = omp_get_thread_num();
+				double r1 = uniform(engine[tid]);
+				double r2 = uniform(engine[tid]);
+				double x_boxMuller = sqrt(-2 * log(r1)) * cos(2 * M_PI * r2) * 0.5;
+				double y_boxMuller = sqrt(-2 * log(r1)) * sin(2 * M_PI * r2) * 0.5;
+				double X = j - W / 2 + 0.5 + x_boxMuller;
+				double Y = H / 2 - i - 0.5 + y_boxMuller;
+				double Z = -(W) / (2 * tan(scene.fov / 2));
+				Vector rand_dir(X,Y,Z);
+				rand_dir.normalize();
+				Ray ray(scene.camera_center, rand_dir);
+				color = color + scene.getColor(ray, 0);
+
+			}
+
+
+			image[i * W * 3 + j * 3 + 0] = std::min(255., std::pow(color[0] / NB_PATHS, 1. / scene.gamma));
+			image[i * W * 3 + j * 3 + 1] = std::min(255., std::pow(color[1] / NB_PATHS, 1. / scene.gamma));
+			image[i * W * 3 + j * 3 + 2] = std::min(255., std::pow(color[2] / NB_PATHS, 1. / scene.gamma));
+			// TODO (lab 2) : add depth of field effect by altering the ray origin (and direction) 
 		}
 	}
 	stbi_write_png("image.png", W, H, 3, &image[0], 0);
 
 	return 0;
 }
+
