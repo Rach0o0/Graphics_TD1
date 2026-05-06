@@ -4,7 +4,7 @@
 Actually working on lab2:
 - implement indirect lighting part for point light sources
 - add antialiasing
-- optional : soft shadows 
+- optional : soft shadows
 */
 
 
@@ -65,10 +65,10 @@ Vector operator-(const Vector& a, const Vector& b) {
 	return Vector(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 Vector operator*(const double a, const Vector& b) {
-	return Vector(a*b[0], a*b[1], a*b[2]);
+	return Vector(a * b[0], a * b[1], a * b[2]);
 }
 Vector operator*(const Vector& a, const double b) {
-	return Vector(a[0]*b, a[1]*b, a[2]*b);
+	return Vector(a[0] * b, a[1] * b, a[2] * b);
 }
 
 Vector operator*(const Vector& a, const Vector& b) {
@@ -135,9 +135,9 @@ public:
 	// if there is an intersection, also computes the point of intersection P, 
 	// t>=0 the distance between the ray origin and P (i.e., the parameter along the ray)
 	// and the unit normal N
-	bool intersect(const Ray& ray, Vector& P, double &t, Vector& N) const {
+	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N) const {
 		// TODO (lab 1) : compute the intersection (just true/false at the begining of lab 1, then P, t and N as well)
-		
+
 		Vector oc = ray.O - this->C;
 		double a = dot(ray.u, oc);
 		double b = dot(oc, oc) - sqr(R);
@@ -196,12 +196,46 @@ class TriangleMesh : public Object {
 public:
 	TriangleMesh(const Vector& albedo, bool mirror = false, bool transparent = false) : ::Object(albedo, mirror, transparent) {};
 
+	//we add a structure to handle nodes in BVH tree
+	struct BVHNode {
+		//bounding box of the node
+		Vector Bmin, Bmax;
+		//the box includes a starting_triangle and a ending one
+		int start_index;
+		int end_index;
+		int child_left;
+		int child_right;
+
+		BVHNode() {
+			start_index = 0;
+			end_index = 0;
+			child_left = -1; //no child
+			child_right = -1;
+		}
+	};
+
+
+
 	// first scale and then translate the current object
 	void scale_translate(double s, const Vector& t) {
 		for (int i = 0; i < vertices.size(); i++) {
 			vertices[i] = vertices[i] * s + t;
 		}
 	}
+
+	//compute bounding box
+	void computeBoundingBox() {
+		Bmin = Vector(1e10, 1e10, 1e10);
+		Bmax = Vector(-1e10, -1e10, -1e10);
+
+		for (int i = 0; i < vertices.size(); i++) {
+			for (int j = 0; j < 3; j++) {
+				Bmin[j] = std::min(Bmin[j], vertices[i][j]);
+				Bmax[j] = std::max(Bmax[j], vertices[i][j]);
+			}
+		}
+	}
+
 
 	// read an .obj file
 	void readOBJ(const char* obj) {
@@ -334,16 +368,254 @@ public:
 
 
 	// TODO ray-mesh intersection (labs 3 and 4)
+	/*
+	bool intersectBox(const Ray& ray) const {
+		double tmin = -std::numeric_limits<double>::infinity();
+		double tmax = std::numeric_limits<double>::infinity();
 
+		for (int i = 0; i < 3; i++) {
+			double t0 = (Bmin[i] - ray.O[i]) / ray.u[i];
+			double t1 = (Bmax[i] - ray.O[i]) / ray.u[i];
+			if (t0 > t1) {
+				std::swap(t0, t1);
+			}
+
+			tmin = std::max(tmin, t0);
+			tmax = std::min(tmax, t1);
+			if (tmin > tmax) return false;
+		}
+		return tmax >= 0;
+	}
+	*/
+
+
+	//BVH 
+
+	/*
+	methods i have to add :
+	- compute_bbox(starting_triangle, ending_triangle)
+	- compute_diag(node->bbox)
+	- get_longest(diag)
+	- compute_barycenter(indices[i])
+	*/
+
+	//small method to compute a barycenter for a triangle
+	Vector compute_barycenter(int i) {
+		Vector A = vertices[indices[i].vtx[0]];
+		Vector B = vertices[indices[i].vtx[1]];
+		Vector C = vertices[indices[i].vtx[2]];
+
+		return (A + B + C) / 3.0;
+	}
+
+	//method to compute BBox from starting triangle to ending triangle excluded
+	BVHNode compute_bbox(int start_index, int end_index) {
+		BVHNode node;
+
+		node.start_index = start_index;
+		node.end_index = end_index;
+		node.Bmin = Vector(1e10, 1e10, 1e10);
+		node.Bmax = Vector(-1e10, -1e10, -1e10);
+
+		for (int i = start_index; i < end_index; i++) {
+			for (int k = 0; k < 3; k++) {
+				Vector V = vertices[indices[i].vtx[k]];
+
+				for (int d = 0; d < 3; d++) {
+					node.Bmin[d] = std::min(node.Bmin[d], V[d]);
+					node.Bmax[d] = std::max(node.Bmax[d], V[d]);
+				}
+			}
+		}
+
+		return node;
+	}
+
+	//size of a bbox in x,y,z
+	Vector compute_diag(BVHNode& node) {
+		return node.Bmax - node.Bmin;
+	}
+
+	//get longest axis (0 = x, 1 = y, 2 = z)
+	int get_longest(const Vector& diag) const {
+		int longest_axis = 0;
+
+		if (diag[1] > diag[longest_axis]) {
+			longest_axis = 1;
+		}
+		if (diag[2] > diag[longest_axis]) {
+			longest_axis = 2;
+		}
+		return longest_axis;
+	}
+	//we want to slice the bbox in the longest direction
+
+	//intersect but for a given box
+	//t_box gives distance to the box
+	bool intersectBox(const Ray& ray, const Vector& bmin, const Vector& bmax, double& t_box) const {
+		double tmin = -std::numeric_limits<double>::infinity();
+		double tmax = std::numeric_limits<double>::infinity();
+
+		for (int i = 0; i < 3; i++) {
+			double t0 = (bmin[i] - ray.O[i]) / ray.u[i];
+			double t1 = (bmax[i] - ray.O[i]) / ray.u[i];
+
+			if (t0 > t1) {
+				std::swap(t0, t1);
+			}
+
+			tmin = std::max(tmin, t0);
+			tmax = std::min(tmax, t1);
+
+			if (tmin > tmax) {
+				return false;
+			}
+		}
+
+		t_box = tmin;
+		return tmax >= 0;
+	}
+
+	//build recursively the BVH
+	/*
+	code from the textbook
+	create bounding box around triangles, find longest axis, compute center, separate triangles, 2 children recursively
+	*/
+
+	int buildBVHRecursive(int start_index, int end_index) {
+		BVHNode node = compute_bbox(start_index, end_index);
+		//bbox from starting triangle included to ending_triangle excluded
+
+		int node_id = nodes.size();
+		nodes.push_back(node);
+
+		Vector diag = compute_diag(nodes[node_id]);
+
+		Vector middle_diag = nodes[node_id].Bmin + diag * 0.5;
+
+		int longest_axis = get_longest(diag);
+		int pivot_index = start_index;
+
+		for (int i = start_index; i < end_index; i++) {
+			Vector barycenter = compute_barycenter(i);
+			//the swap below guarentees triangles whose barycenter are smaller than middle diag are before pivot index
+
+			if (barycenter[longest_axis] < middle_diag[longest_axis]) {
+				std::swap(indices[i], indices[pivot_index]);
+				pivot_index++;
+			}
+		}
+		//stopping criterion
+		if (pivot_index <= start_index ||
+			pivot_index >= end_index - 1 ||
+			end_index - start_index < 5) {
+			return node_id;
+		}
+
+		nodes[node_id].child_left = buildBVHRecursive(start_index, pivot_index);
+		nodes[node_id].child_right = buildBVHRecursive(pivot_index, end_index);
+
+		return node_id;
+	}
+
+	//buildBVH
+	void buildBVH() {
+		nodes.clear();
+		buildBVHRecursive(0, indices.size());
+	}
 
 	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N) const {
+
+		//empty bvh ?
+		if (nodes.empty()) return false;
+
+		bool hit = false;
+		double best_t = std::numeric_limits<double>::infinity();
+		//stack of nodes
+		std::vector<int> stack;
+		stack.push_back(0); //root = 0
+
+		while (!stack.empty()) {
+
+			int node_id = stack.back();
+			stack.pop_back();
+			const BVHNode& node = nodes[node_id];
+			double t_box;
+
+			//test bounding box of the node
+			if (!intersectBox(ray, node.Bmin, node.Bmax, t_box)) continue;
+			if (t_box > best_t) continue;
+
+			//no child ?
+			if (node.child_left == -1 && node.child_right == -1) {
+
+				//test triangles of the node
+				for (int i = node.start_index; i < node.end_index; i++) {
+
+					Vector A = vertices[indices[i].vtx[0]];
+					Vector B = vertices[indices[i].vtx[1]];
+					Vector C = vertices[indices[i].vtx[2]];
+
+					Vector e1 = B - A;
+					Vector e2 = C - A;
+					Vector n = cross(e1, e2);
+
+					double denom = dot(ray.u, n);
+					if (fabs(denom) < 1e-10) continue;
+
+					double beta = dot(e2, cross((A - ray.O), ray.u)) / denom;
+					double gamma = -dot(e1, cross((A - ray.O), ray.u)) / denom;
+					double alpha = 1 - beta - gamma;
+
+					double t_tmp = dot(A - ray.O, n) / denom;
+
+					if (alpha >= 0 && beta >= 0 && gamma >= 0 &&
+						beta <= 1 && gamma <= 1 &&
+						t_tmp >= 1e-6) {
+
+						if (t_tmp < best_t) {
+							best_t = t_tmp;
+							P = ray.O + t_tmp * ray.u;
+							n.normalize();
+							N = n;
+							hit = true;
+						}
+					}
+				}
+			}
+			else {
+				//add children
+				if (node.child_left != -1)
+					stack.push_back(node.child_left);
+
+				if (node.child_right != -1)
+					stack.push_back(node.child_right);
+			}
+		}
+
+		t = best_t;
+		return hit;
+	}
+
+	/*
+	bool old_intersect(const Ray& ray, Vector& P, double& t, Vector& N) const {
 		// lab 3 : for each triangle, compute the ray-triangle intersection with Moller-Trumbore algorithm
+
 		
-		/*
-		point P within triangle A, B, C if P = a A + b B + c C, a,b,c in [0,1]
-		and a + b + c = 1
-		
-		*/
+		//point P within triangle A, B, C if P = a A + b B + c C, a,b,c in [0,1]
+		//and a + b + c = 1
+
+		//bounding box
+		if (!intersectBox(ray)) return false;
+
+
+		bool hit = false;
+		//we keep the nearest triangle 
+		double best_t = std::numeric_limits<double>::infinity();
+		Vector best_P;
+		Vector best_N;
+
+
 		//for each triangle
 		for (int i = 0; i < indices.size(); ++i) {
 			//take from vertices, points A,B,C
@@ -354,36 +626,56 @@ public:
 			Vector e1 = B - A;
 			Vector e2 = C - A;
 
-			N = cross(e1, e2);
+			Vector n = cross(e1, e2);
 
-			double beta = dot(e2, cross((A - ray.O), ray.u)) / dot(ray.u, N);
-			double gamma = - dot(e1, cross((A - ray.O), ray.u)) / dot(ray.u, N);
+			double denom = dot(ray.u, n);
+			if (fabs(denom) < 1e-10) continue;
+
+			double beta = dot(e2, cross((A - ray.O), ray.u)) / denom;
+			double gamma = -dot(e1, cross((A - ray.O), ray.u)) / denom;
 			double alpha = 1 - beta - gamma;
-			t = dot(A - ray.O, N) / dot(ray.u, N);
 
-			if (0 <= beta && beta <= 1 && 0 <= gamma && gamma <= 1 && t >= 0) {
-				P = A + beta * e1 + gamma * e2;
-				return true;
+			double t_tmp = dot(A - ray.O, n) / denom;
+
+			if (alpha >= 0 && 0 <= beta && beta <= 1 && 0 <= gamma && gamma <= 1 && t_tmp >= 1e-6) {
+				if (t_tmp < best_t) {
+					best_t = t_tmp;
+					best_P = ray.O + t_tmp * ray.u;
+					n.normalize();
+					best_N = n;
+					hit = true;
+				}
+
 			}
 		}
-		
-	
-		
+
+		if (hit) {
+			t = best_t;
+			P = best_P;
+			N = best_N;
+		}
+
 		// lab 3 : once done, speed it up by first checking against the mesh bounding box
-		
-		
-		
+		//box around the cat
+
+
+
 		// lab 4 : recursively apply the bounding-box test from a BVH datastructure
 
 
-		return false;
+		return hit;
 	}
+	*/
 
-	std::vector<TriangleIndices> indices; 
+	std::vector<TriangleIndices> indices;
 	std::vector<Vector> vertices;
 	std::vector<Vector> normals;
 	std::vector<Vector> uvs;
 	std::vector<Vector> vertexcolors;
+	//bounding box
+	Vector Bmin, Bmax;
+	//bvh nodes 
+	std::vector<BVHNode> nodes;
 };
 
 
@@ -395,11 +687,11 @@ public:
 	}
 
 	// returns true iif there is an intersection between the ray and any object in the scene
-    // if there is an intersection, also computes the point of the *nearest* intersection P, 
-    // t>=0 the distance between the ray origin and P (i.e., the parameter along the ray)
-    // and the unit normal N. 
+	// if there is an intersection, also computes the point of the *nearest* intersection P, 
+	// t>=0 the distance between the ray origin and P (i.e., the parameter along the ray)
+	// and the unit normal N. 
 	// Also returns the index of the object within the std::vector objects in object_id
-	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N, int &object_id) const  {
+	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N, int& object_id) const {
 
 		// TODO (lab 1): iterate through the objects and check the intersections with all of them, 
 		// and keep the closest intersection, i.e., the one if smallest positive value of t
@@ -419,9 +711,9 @@ public:
 					N_res = N;
 				}
 			}
-			
+
 		}
-		
+
 		t = t_res;
 		P = P_res;
 		N = N_res;
@@ -520,17 +812,19 @@ public:
 	Vector camera_center, light_position;
 	double fov, gamma, light_intensity;
 	int max_light_bounce;
+	int max_path_length;
+	int nb_paths;
 };
 
 
 int main() {
-	int W = 128;
-	int H = 128;
+	int W = 512;
+	int H = 512;
 
-	for (int i = 0; i<32; i++) {
+	for (int i = 0; i < 32; i++) {
 		engine[i].seed(i);
 	}
-	Sphere left_sphere(Vector(-20, 0, 0), 10., Vector(0.8, 0.2, 0.4), false, false);
+	Sphere left_sphere(Vector(-20, 0, 20), 10., Vector(0.8, 0.2, 0.4), false, false);
 	Sphere center_sphere(Vector(0, 0, 0), 10., Vector(0.8, 0.8, 0.8), true, false);
 	Sphere wall_left(Vector(-1000, 0, 0), 940, Vector(0.5, 0.8, 0.1));
 	Sphere wall_right(Vector(1000, 0, 0), 940, Vector(0.9, 0.2, 0.3));
@@ -541,19 +835,23 @@ int main() {
 
 	Scene scene;
 	scene.camera_center = Vector(0, 0, 55);
-	scene.light_position = Vector(-10,20,40);
+	scene.light_position = Vector(-10, 20, 40);
 	scene.light_intensity = 3E7;
 	scene.fov = 60 * M_PI / 180.;
 	scene.gamma = 2.2;    // TODO (lab 1) : play with gamma ; typically, gamma = 2.2
-	scene.max_light_bounce = 5;
+	scene.max_light_bounce = 15;
+	scene.nb_paths = 32;
+	scene.max_path_length = 3;
 
 	//scene.addObject(&center_sphere);
 	//scene.addObject(&left_sphere);
-	
+
 	//CAT
-	TriangleMesh cat(Vector(0.4, 0.3, 0.0), false, false);
+	TriangleMesh cat(Vector(0.4, 0.4, 0.4), false, false);
 	cat.readOBJ("objects/cat.obj");
 	cat.scale_translate(0.5, Vector(0., -10., 0.));
+	cat.computeBoundingBox();
+	cat.buildBVH();
 	scene.addObject(&cat);
 
 
@@ -563,15 +861,15 @@ int main() {
 	scene.addObject(&wall_behind);
 	scene.addObject(&ceiling);
 	scene.addObject(&floor);
-	
-	
+
+
 
 	std::vector<unsigned char> image(W * H * 3, 0);
 
 #pragma omp parallel for schedule(dynamic, 1)
 	for (int i = 0; i < H; i++) {
 		for (int j = 0; j < W; j++) {
-			Vector color(0.,0.,0.);
+			Vector color(0., 0., 0.);
 
 			// TODO (lab 1) : correct ray_direction so that it goes through each pixel (j, i)			
 			/*
@@ -587,40 +885,56 @@ int main() {
 
 			// TODO (lab 2) : add Monte Carlo / averaging of random ray contributions here
 			// TODO (lab 2) : add antialiasing by altering the ray_direction here
-			
+
 			/*
 			discontinuity btwn adjacent pixels -> aliasing
 			camera sensor cells have an area, arranged in a Bayer pattern
 			twice as many "green cells" than red and blue
 
 			We can directly emulate an RGB-senstive pixel array
-			Integrate radiance that reaches the camera sensor 
+			Integrate radiance that reaches the camera sensor
 			Li,j = Int[Li(x,wi(x)) hi,j(x)dx]
 
 			*/
-			int NB_PATHS = 5;
-			int max_path_length = 3;
 
-			for (int k = 0; k < NB_PATHS; k++) {
+			for (int k = 0; k < scene.nb_paths; k++) {
 				int tid = omp_get_thread_num();
 				double r1 = uniform(engine[tid]);
 				double r2 = uniform(engine[tid]);
-				double x_boxMuller = sqrt(-2 * log(r1)) * cos(2 * M_PI * r2) * 0.5;
-				double y_boxMuller = sqrt(-2 * log(r1)) * sin(2 * M_PI * r2) * 0.5;
+				double x_boxMuller = sqrt(-2 * log(r1)) * cos(2 * M_PI * r2) * 0.2;
+				double y_boxMuller = sqrt(-2 * log(r1)) * sin(2 * M_PI * r2) * 0.2;
+
 				double X = j - W / 2 + 0.5 + x_boxMuller;
 				double Y = H / 2 - i - 0.5 + y_boxMuller;
 				double Z = -(W) / (2 * tan(scene.fov / 2));
-				Vector rand_dir(X,Y,Z);
+				Vector rand_dir(X, Y, Z);
 				rand_dir.normalize();
-				Ray ray(scene.camera_center, rand_dir);
-				color = color + scene.getColor(ray, max_path_length);
+
+				//depth of field
+				double focal_distance = 55.0;
+				double aperture = 1.0;
+
+				//focus point
+				Vector focus_point = scene.camera_center + focal_distance * rand_dir;
+
+				//random point for aperture
+				double rand_aperture = aperture * sqrt(uniform(engine[tid]));
+				double theta_aperture = 2.0 * M_PI * uniform(engine[tid]);
+				Vector random_camera_origin(scene.camera_center[0] + rand_aperture * cos(theta_aperture), scene.camera_center[1] + rand_aperture * sin(theta_aperture), scene.camera_center[2]);
+
+				//direction
+				Vector dof_dir = focus_point - random_camera_origin;
+				dof_dir.normalize();
+
+				Ray ray(random_camera_origin, dof_dir);
+				color = color + scene.getColor(ray, 0);
 
 			}
 
 
-			image[i * W * 3 + j * 3 + 0] = std::min(255., std::max(0., 255. * std::pow((color[0] / NB_PATHS) / 255., 1. / scene.gamma)));
-			image[i * W * 3 + j * 3 + 1] = std::min(255., std::max(0., 255. * std::pow((color[1] / NB_PATHS) / 255., 1. / scene.gamma)));
-			image[i * W * 3 + j * 3 + 2] = std::min(255., std::max(0., 255. * std::pow((color[2] / NB_PATHS) / 255., 1. / scene.gamma)));
+			image[i * W * 3 + j * 3 + 0] = std::min(255., std::max(0., 255. * std::pow((color[0] / scene.nb_paths) / 255., 1. / scene.gamma)));
+			image[i * W * 3 + j * 3 + 1] = std::min(255., std::max(0., 255. * std::pow((color[1] / scene.nb_paths) / 255., 1. / scene.gamma)));
+			image[i * W * 3 + j * 3 + 2] = std::min(255., std::max(0., 255. * std::pow((color[2] / scene.nb_paths) / 255., 1. / scene.gamma)));
 			// TODO (lab 2) : add depth of field effect by altering the ray origin (and direction) 
 		}
 	}
@@ -628,4 +942,3 @@ int main() {
 
 	return 0;
 }
-
