@@ -167,9 +167,9 @@ int main() {
 
 		//Advect initial point cloud
 		for (int i = 0; i< n; i++){
-			I[projI[i].second].r = (projM[i].first - projI[i].first) * v.r;
-			I[projI[i].second].g = (projM[i].first - projI[i].first) * v.g;
-			I[projI[i].second].b = (projM[i].first - projI[i].first) * v.b;
+			I[projI[i].second].r += (projM[i].first - projI[i].first) * v.r;
+			I[projI[i].second].g += (projM[i].first - projI[i].first) * v.g;
+			I[projI[i].second].b +=  (projM[i].first - projI[i].first) * v.b;
 		}
 
 	}
